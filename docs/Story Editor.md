@@ -43,10 +43,13 @@ Today `Post` is text-only (`title`, `content` — see `prisma/schema.prisma`) an
 - [ ] Mobile viewport meta tweak scoped to this route only: prevent page-level pinch-zoom fighting the canvas gesture (`user-scalable=no` / `maximum-scale=1` on this route, not app-wide)
 - [ ] Editor container sized with `100dvh` (not `100vh` — iOS Safari's dynamic toolbar makes `100vh` unreliable), `touch-action: none` on the stage wrapper so Konva's own touch handling isn't fought by native scroll/zoom
 
-## Phase 2 — layer model & state
-- [ ] Define `Layer` type: `{ id, type: 'image' | 'text', x, y, width, height, rotation, zIndex, ...type-specific fields }` (text adds `text, fontFamily, fontSize, color, align`; image adds `src`)
-- [ ] Svelte store holding `{ baseImage, layers: Layer[], selectedLayerId }` as the serializable source of truth — Konva nodes are the view, store is the model; sync store→Konva on mount/reorder, sync Konva→store only on `dragend`/`transformend` (not every frame, to avoid store churn during a drag)
-- [ ] Undo/redo: linear `{past, present, future}` history of full-state snapshots, pushed on committed actions (layer add/delete/reorder/transform-end/text-edit-commit) — deep-clone is cheap at this scale, don't reach for patch-based diffing
+## Phase 2 — layer model & state — ✅ done
+- [x] `Layer` discriminated union (`ImageLayer` | `TextLayer`) in `src/lib/story-editor/types.ts`, plus `EditorState`/`createEmptyEditorState()`
+- [x] `src/lib/story-editor/editorStore.ts` — `createEditorStore()`: `{past, present, future}` history, `subscribe`/`canUndo`/`canRedo`, and layer ops (`addImageLayer`, `addTextLayer`, `updateLayer`, `deleteLayer`, `duplicateLayer`, `reorderLayer`, `selectLayer`, `undo`/`redo`/`reset`). `zIndex` is array-index-derived and renumbered (`normalizeZIndex`) on every structural change, so array order doubles as render order. `selectLayer` deliberately bypasses undo history (mutates `present` directly) — matches the plan's intent that only "committed" structural actions are undoable, not selection.
+- [x] Undo/redo implemented as planned: linear history of full-state snapshots via `structuredClone` (JSON fallback for older environments), capped at 50 entries, pushed only on structural actions
+- [x] 10 Vitest unit tests in `editorStore.test.ts` covering add/update/delete/duplicate/reorder/undo/redo/branching — all passing, isolated from Konva entirely (no DOM/canvas needed)
+
+**Deviation from the Phase 0 checklist**: dropped `svelte-konva` from the dependency list. Reasoning (from the Sonnet agent building this): every interaction in Phases 4-7 (hand-rolled pinch/rotate, `Transformer.getClientRect()` for the trash icon, manual z-order, textarea-overlay text editing) needs direct Konva node handles regardless, so `svelte-konva`'s reactive prop-binding would just be a second reactivity system fighting Svelte's and Konva's own for no benefit — this is exactly the fallback the "Tech approach" section above already called out (drive vanilla Konva imperatively via `onMount`/`onDestroy` if the wrapper fights gesture updates). Going straight to the fallback rather than adopting-then-abandoning the wrapper. `konva` itself (not the Svelte wrapper) is added as a dependency.
 
 ## Phase 3 — base image + adding layers
 - [ ] Base layer: `<input type="file" accept="image/*" capture>` (capture hints camera on mobile) to pick/take the starting photo; load into Konva as the bottom `Konva.Image`

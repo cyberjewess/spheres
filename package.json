@@ -45,6 +45,7 @@
     "@types/bcrypt": "^5.0.2",
     "@vercel/blob": "^2.6.1",
     "@vercel/postgres": "^0.8.0",
+    "konva": "^9.3.22",
     "sass": "^1.77.1",
     "vercel": "^32.3.0"
   }
