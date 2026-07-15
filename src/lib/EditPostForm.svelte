@@ -2,11 +2,17 @@
   import Button from "./components/Button.svelte";
 
   export let title: string;
-  export let content: string;
+  export let content: string | null = null;
+  export let imageUrl: string | null = null;
 </script>
 
 <form action="?/updatePost" method="POST">
   <h2>Editing: {title}</h2>
+  {#if imageUrl}
+    <div class="imagePreview">
+      <img src={imageUrl} alt={title} />
+    </div>
+  {/if}
   <label for="title"><h3>Title</h3></label>
   <input class="formEntry" type="text" id="title" name="title" value={title} />
   <label for="content"><h3>Content</h3></label>
@@ -15,7 +21,7 @@
     id="content"
     name="content"
     rows={5}
-    value={content}
+    value={content ?? ""}
   />
   <div class="buttonContainer">
     <Button type="submit" text="Update Post" />
@@ -41,5 +47,17 @@
     width: fit-content;
     border: solid gray;
     border-radius: 10px;
+  }
+
+  .imagePreview {
+    margin-bottom: 1em;
+  }
+
+  .imagePreview img {
+    display: block;
+    max-width: 100%;
+    max-height: 320px;
+    border-radius: 10px;
+    object-fit: cover;
   }
 </style>

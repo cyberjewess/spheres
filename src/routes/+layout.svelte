@@ -1,3 +1,7 @@
+<script>
+  import "$lib/fonts.css";
+</script>
+
 <slot />
 
 <style lang="scss">

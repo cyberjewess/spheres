@@ -89,6 +89,7 @@
           content={p.post.content}
           id={p.post.id}
           sphereName={getSphereName(p.post.sphereId)}
+          imageUrl={p.post.imageUrl}
         />
       {/each}
     </div>

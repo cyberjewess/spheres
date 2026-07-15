@@ -19,13 +19,23 @@ Today `Post` is text-only (`title`, `content` — see `prisma/schema.prisma`) an
 # TODO
 
 ## Phase 0 — foundations
-- [ ] Add dependencies: `konva`, `svelte-konva@0.3.1` (pinned, not `^1`), `@vercel/blob`
+- [x] Add `@vercel/blob` dependency (`^2.6.1`, installed, `package-lock.json` regenerated)
+- [ ] Add `konva`, `svelte-konva@0.3.1` (pinned, not `^1`) — still open, needed for Phase 1+
 - [ ] Set up Vercel Blob: add `BLOB_READ_WRITE_TOKEN` to env (dev + Vercel project), document in README alongside the existing `vercel env pull` instructions
-- [ ] **Storage adapter abstraction** — put all provider-specific code behind one module, e.g. `src/lib/server/storage/index.ts` exporting a small interface (roughly: `requestUpload(fileMeta)` → returns whatever the client needs to upload directly — a token/URL — plus the eventual `publicUrl`; `deleteImage(url)` for cleanup on post-delete). Implement `vercelBlobAdapter.ts` against `@vercel/blob`'s `handleUpload`/client-token flow as the only thing that imports `@vercel/blob` directly. Routes/components call the interface, never the SDK. Swapping to Cloudflare R2 or S3 later means writing one new adapter file (presigned-URL flow, same shape) and changing a single export — no changes to the editor, routes, or Prisma schema (`imageUrl` stays a plain string either way).
-- [ ] Prisma: add `imageUrl String` (Blob CDN URL) to `Post`, make `content` optional (`String?`) since a story post may have no separate text content — decide whether Story posts are a new `postType` field on `Post` or reuse the same model with `imageUrl` nullable for text-only posts (recommend: single `Post` model, `imageUrl String?`, keeps `origin` feed queries and `Post.svelte` display simple)
-- [ ] Migration: `npx prisma migrate dev` for the schema change; regenerate client
+- [x] **Storage adapter abstraction** — done. `src/lib/server/storage/types.ts` defines `StorageAdapter` (`handleClientUploadRequest`, `deleteImage`) mirroring Vercel Blob's real client-direct-upload flow (checked against the actual `@vercel/blob@2.6.1` types, not guessed); `vercelBlobAdapter.ts` is the only file importing `@vercel/blob`; `index.ts` re-exports it as `storage` — the single import point for the rest of the app. Swapping providers later = new adapter file + one export change.
+- [x] Prisma: `imageUrl String?` added to `Post`, `content` made `String?` (single `Post` model, nullable `imageUrl` distinguishes a story post from a text post — see open question below on whether that's sufficient long-term)
+- [ ] Migration: hand-written SQL exists at `prisma/migrations/20260715011800_add_image_url_to_post/migration.sql` (no live DB was available to actually run/verify it — ⚠️ **run `npx prisma migrate dev` against a real database to confirm/regenerate before relying on it**, then regenerate the Prisma client)
 - [ ] Decide on a `draft` JSON column (or skip drafts for v1) — layer-stack state (§ below) is easy to persist later if you want "save and resume editing," but not required for a first cut
-- [ ] Pick/license 5-8 fonts (OFL), self-host `.woff2` files in `static/fonts/`, wire up `@font-face`
+- [x] Fonts picked/licensed/self-hosted — 6 families (8 files, ~208KB), all SIL OFL 1.1, sourced from Google Fonts, files in `static/fonts/` + `OFL.txt`/`ATTRIBUTION.txt`, `@font-face` rules in `src/lib/fonts.css`, imported once from root `+layout.svelte`:
+
+  | font-family | Purpose |
+  |---|---|
+  | `Poppins` (400, 700) | Bold/heavy sans — punchy headline-style captions |
+  | `Anton` (400) | Heavy ultra-condensed impact display — big "meme/story" statement text |
+  | `Bebas Neue` (400) | Condensed all-caps display — tall, IG-story-style headers |
+  | `Caveat` (400, 700) | Handwriting/script — casual, personal-note mood |
+  | `Playfair Display` (400, 700) | Serif — elegant/editorial captions |
+  | `Space Mono` (400, 700) | Monospace — typewriter/technical caption mood |
 
 ## Phase 1 — editor shell & route
 - [ ] New route `src/routes/origin/create-story/+page.svelte` + `+page.server.ts` (server action needs `locals.username` → userId lookup, following the existing two-step pattern in `origin/+page.server.ts` — do **not** copy the hardcoded `userId: 1` bug from `[postId]/+page.server.ts`'s `updatePost`)
@@ -70,11 +80,11 @@ Today `Post` is text-only (`title`, `content` — see `prisma/schema.prisma`) an
 - [ ] Submit form action with `{ sphere, imageUrl, title/content? }`, following the existing `createPost` action shape in `origin/+page.server.ts` — use `fail()` consistently for errors (existing code mixes `fail()` and bare `{status, message}` objects; don't propagate that inconsistency into new code)
 
 ## Phase 8 — display
-- [ ] Update `src/lib/Post.svelte` to render `imageUrl` when present (image-forward layout, IG-story-card-like) vs the current text-only card
-- [ ] `origin` feed and single-post `[postId]` route both need to handle posts with an image
+- [x] `src/lib/Post.svelte` renders `imageUrl` when present — image-forward card (full-width rounded `<img>`, capped height, `object-fit: cover`) with title/content overlaid via a bottom gradient scrim, IG-story-caption style; falls back to the original plain text layout when `imageUrl` is null
+- [x] `origin` feed (`+page.svelte`) and single-post `[postId]` route/`EditPostForm` both pass through and handle `imageUrl` (read-only preview in the edit form; upload control itself is out of scope until the editor exists)
 
 ## Phase 9 — testing
-- [ ] Fix the currently-stale Playwright test in `tests/test.ts` (asserts the default SvelteKit welcome heading, which no longer matches `+page.svelte`'s "Welcome to Spheres") while touching this area
+- [x] Fixed the stale Playwright test in `tests/test.ts` (was asserting the default SvelteKit welcome heading; now asserts "Welcome to Spheres" matching `+page.svelte`)
 - [ ] Add a Playwright test for the story-creation happy path (upload base image, add a text layer, delete a layer, export, submit) — no existing auth-mocking test fixture exists in this repo, so this also means building a minimal login-as-test-user helper
 - [ ] Unit-test the layer-store reducer logic (add/delete/reorder/undo/redo) in isolation from Konva — `src/index.test.ts` is currently a placeholder smoke test, this would be the first real unit test in the repo
 

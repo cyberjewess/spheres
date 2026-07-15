@@ -32,7 +32,8 @@ model Post {
   id         Int       @id @default(autoincrement())
   createTime DateTime? @default(dbgenerated("timezone('utc'::text, now())")) @db.Timestamp(6)
   title      String
-  content    String
+  content    String?
+  imageUrl   String?
   userId     Int
   user       User      @relation("owner", fields: [userId], references: [id])
   sphereId   Int

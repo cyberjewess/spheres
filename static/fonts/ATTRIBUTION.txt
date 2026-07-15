@@ -1,0 +1,40 @@
+Fonts bundled in this directory, all SIL Open Font License 1.1 (see OFL.txt).
+Source: Google Fonts (https://fonts.google.com), files fetched from
+fonts.gstatic.com via the Google Fonts CSS2 API; upstream sources at
+https://github.com/google/fonts/tree/main/ofl/<name>.
+
+- Poppins
+  Copyright 2020 The Poppins Project Authors
+  (https://github.com/itfoundry/Poppins)
+  Files: poppins-400.woff2, poppins-700.woff2
+
+- Anton
+  Copyright 2020 The Anton Project Authors
+  (https://github.com/googlefonts/AntonFont.git)
+  Files: anton-400.woff2 (only one weight is published upstream)
+
+- Bebas Neue
+  Copyright 2010 by Dharma Type.
+  Files: bebasneue-400.woff2 (only one weight is published upstream)
+
+- Caveat
+  Copyright 2014 The Caveat Project Authors
+  (https://github.com/googlefonts/caveat)
+  Files: caveat-variable.woff2
+  Note: this is a variable font; Google serves the same physical file for
+  the 400 and 700 weight requests (the browser interpolates the "wght"
+  axis from the font-weight descriptor), so only one file is stored and
+  fonts.css declares two @font-face rules against it.
+
+- Playfair Display
+  Copyright 2017 The Playfair Display Project Authors, with Reserved Font
+  Name "Playfair Display"
+  (https://github.com/clauseggers/Playfair-Display)
+  Files: playfairdisplay-variable.woff2
+  Note: same variable-font situation as Caveat above — one file, two
+  @font-face weight declarations in fonts.css.
+
+- Space Mono
+  Copyright 2016 The Space Mono Project Authors
+  (https://github.com/googlefonts/spacemono)
+  Files: spacemono-400.woff2, spacemono-700.woff2
