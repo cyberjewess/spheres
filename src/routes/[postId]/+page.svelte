@@ -8,5 +8,5 @@
 
 <Navbar />
 <main>
-  <EditPostForm title={post.title} content={post.content} />
+  <EditPostForm title={post.title} content={post.content} imageUrl={post.imageUrl} />
 </main>

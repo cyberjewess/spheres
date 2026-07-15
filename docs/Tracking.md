@@ -1,6 +1,6 @@
 | Todo                               | In Progress | Review | Merged                 |
 | ---------------------------------- | ----------- | ------ | ---------------------- |
-|                                    |             |        | [[Session Management]] |
+| [[Story Editor]]                   |             |        | [[Session Management]] |
 |                                    |             |        | [[Sign Up]]            |
 |                                    |             |        | [[Sign In]]            |
 |                                    |             |        | [[Log Out]]            |

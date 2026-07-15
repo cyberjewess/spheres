@@ -1,0 +1,105 @@
+/**
+ * Curated, self-hosted font set for the Story Editor's text-layer font picker.
+ *
+ * All fonts are SIL Open Font License 1.1 (see /static/fonts/OFL.txt and
+ * /static/fonts/ATTRIBUTION.txt for per-font copyright notices and sources).
+ * Files live in /static/fonts and are served as-is by SvelteKit's static
+ * asset handling (referenced here with root-relative /fonts/... URLs).
+ *
+ * Deliberately a small, bounded set (not an open Google-Fonts search) to
+ * keep bundle size predictable: ~208KB total across 8 files.
+ */
+
+/* Poppins — bold/heavy sans, for punchy headline-style captions */
+@font-face {
+  font-family: 'Poppins';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/poppins-400.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Poppins';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/fonts/poppins-700.woff2') format('woff2');
+}
+
+/* Anton — very heavy, ultra-condensed display face; single weight upstream */
+@font-face {
+  font-family: 'Anton';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/anton-400.woff2') format('woff2');
+}
+
+/* Bebas Neue — condensed all-caps display face; single weight upstream */
+@font-face {
+  font-family: 'Bebas Neue';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/bebasneue-400.woff2') format('woff2');
+}
+
+/*
+ * Caveat — handwriting/script face. Upstream is a variable font; the same
+ * physical file backs both weight declarations below and the browser
+ * interpolates the "wght" axis from the matched font-weight, so only one
+ * file is stored on disk.
+ */
+@font-face {
+  font-family: 'Caveat';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/caveat-variable.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Caveat';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/fonts/caveat-variable.woff2') format('woff2');
+}
+
+/*
+ * Playfair Display — elegant serif. Also a variable font upstream; same
+ * one-file-two-weights situation as Caveat above.
+ */
+@font-face {
+  font-family: 'Playfair Display';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/playfairdisplay-variable.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Playfair Display';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/fonts/playfairdisplay-variable.woff2') format('woff2');
+}
+
+/* Space Mono — monospace, for a typewriter/technical caption mood */
+@font-face {
+  font-family: 'Space Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/spacemono-400.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Space Mono';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/fonts/spacemono-700.woff2') format('woff2');
+}

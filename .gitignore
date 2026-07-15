@@ -1,5 +1,6 @@
 .svelte-kit
 .env*
+.claude/worktrees
 
 # Logs
 logs
@@ -132,3 +133,5 @@ dist
 .yarn/install-state.gz
 .pnp.*
 .vercel
+test-results/
+playwright-report/
