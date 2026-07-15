@@ -360,6 +360,16 @@ export class StoryCanvasController {
       this.store.updateLayer(layerId, { x: node.x(), y: node.y() } as Partial<Layer>);
       this.emitSelectionBounds();
     });
+
+    // Double-tap/double-click a text layer to re-enter edit mode (Phase 5) —
+    // reuses the same textarea-overlay swap "Add text layer" (Phase 3)
+    // already enters immediately after creation.
+    if (node instanceof this.Konva.Text) {
+      node.on("dblclick dbltap", (evt) => {
+        evt.cancelBubble = true;
+        this.enterTextEditMode(layerId);
+      });
+    }
   }
 
   private updateNodeFromLayer(node: AnyNode, layer: Layer): void {

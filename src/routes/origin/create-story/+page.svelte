@@ -5,7 +5,12 @@
   import { createEditorStore } from "$lib/story-editor/editorStore";
   import { StoryCanvasController, type SelectionRect } from "$lib/story-editor/konvaEditor";
   import { loadImageFile } from "$lib/story-editor/imageLoader";
-  import { DEFAULT_FONT_FAMILY, DEFAULT_TEXT_COLOR } from "$lib/story-editor/fonts";
+  import { DEFAULT_FONT_FAMILY, DEFAULT_TEXT_COLOR, FONT_OPTIONS } from "$lib/story-editor/fonts";
+  import type { TextLayer } from "$lib/story-editor/types";
+
+  const MIN_FONT_SIZE = 8;
+  const MAX_FONT_SIZE = 200;
+  const FONT_SIZE_STEP = 4;
 
   const FLOATING_TOOLBAR_HEIGHT = 44;
   const FLOATING_TOOLBAR_WIDTH = 96;
@@ -50,6 +55,15 @@
   $: editorState = $store;
   $: hasBaseImage = editorState.baseImage !== null;
   $: floatingToolbarStyle = computeFloatingToolbarStyle(selectionRect);
+  // Only non-null when the current selection is a text layer — drives the
+  // font/color/size panel (Phase 5). Kept as its own reactive value (rather
+  // than narrowing `layer.type === "text"` inline in the template) so the
+  // panel's markup can access TextLayer-only fields without re-deriving the
+  // narrowing every time.
+  $: selectedTextLayer = (() => {
+    const layer = editorState.layers.find((l) => l.id === editorState.selectedLayerId);
+    return layer && layer.type === "text" ? (layer as TextLayer) : null;
+  })();
 
   function computeFloatingToolbarStyle(rect: SelectionRect | null): string {
     if (!rect || !stageWrapperEl) return "display: none;";
@@ -172,6 +186,33 @@
     if (!id) return;
     store.duplicateLayer(id);
   }
+
+  // ---- text-layer style panel (Phase 5: font/color/size pickers) ----------
+  // Uses `on:change`, not `on:input`, for the font/color controls — `input`
+  // fires continuously while a native color picker is being dragged, and
+  // committing every one of those to undo history would defeat the "commit
+  // on gesture-end, not every frame" rule the rest of the editor follows.
+
+  function handleFontChange(e: Event): void {
+    if (!selectedTextLayer) return;
+    const fontFamily = (e.currentTarget as HTMLSelectElement).value;
+    store.updateLayer(selectedTextLayer.id, { fontFamily });
+  }
+
+  function handleColorChange(e: Event): void {
+    if (!selectedTextLayer) return;
+    const color = (e.currentTarget as HTMLInputElement).value;
+    store.updateLayer(selectedTextLayer.id, { color });
+  }
+
+  function adjustFontSize(delta: number): void {
+    if (!selectedTextLayer) return;
+    const newSize = Math.max(
+      MIN_FONT_SIZE,
+      Math.min(MAX_FONT_SIZE, selectedTextLayer.fontSize + delta),
+    );
+    store.updateLayer(selectedTextLayer.id, { fontSize: newSize });
+  }
 </script>
 
 <svelte:head>
@@ -248,6 +289,46 @@
 
     {#if fileError}
       <p class="error" role="alert">{fileError}</p>
+    {/if}
+
+    {#if selectedTextLayer}
+      <div class="text-style-panel">
+        <label class="style-field">
+          <span class="visually-hidden">Font</span>
+          <select value={selectedTextLayer.fontFamily} on:change={handleFontChange}>
+            {#each FONT_OPTIONS as font}
+              <option value={font.family} style="font-family: '{font.family}', sans-serif">
+                {font.label}
+              </option>
+            {/each}
+          </select>
+        </label>
+
+        <div class="style-field size-field">
+          <button
+            type="button"
+            class="size-button"
+            aria-label="Decrease font size"
+            on:click={() => adjustFontSize(-FONT_SIZE_STEP)}
+          >
+            −
+          </button>
+          <span class="size-value">{selectedTextLayer.fontSize}</span>
+          <button
+            type="button"
+            class="size-button"
+            aria-label="Increase font size"
+            on:click={() => adjustFontSize(FONT_SIZE_STEP)}
+          >
+            +
+          </button>
+        </div>
+
+        <label class="style-field color-field">
+          <span class="visually-hidden">Text color</span>
+          <input type="color" value={selectedTextLayer.color} on:change={handleColorChange} />
+        </label>
+      </div>
     {/if}
 
     <footer class="bottom-toolbar">
@@ -405,6 +486,60 @@
     padding: 0.6rem 1.4rem;
     font-weight: bold;
     font-size: 1rem;
+  }
+
+  .text-style-panel {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.6rem;
+    flex: 0 0 auto;
+    padding: 0.5rem 1rem;
+    flex-wrap: wrap;
+  }
+
+  .style-field select {
+    background-color: #1d3040;
+    color: white;
+    border: solid gray;
+    border-radius: 8px;
+    padding: 0.4rem 0.5rem;
+    max-width: 9.5rem;
+  }
+
+  .size-field {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    background-color: #1d3040;
+    border: solid gray;
+    border-radius: 8px;
+    padding: 0.2rem 0.5rem;
+  }
+
+  .size-button {
+    background: none;
+    border: none;
+    color: white;
+    font-size: 1.1rem;
+    width: 1.6rem;
+    height: 1.6rem;
+    line-height: 1;
+  }
+
+  .size-value {
+    min-width: 2.2rem;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .color-field input[type="color"] {
+    width: 2.2rem;
+    height: 2.2rem;
+    padding: 0;
+    border: solid gray;
+    border-radius: 8px;
+    background: none;
   }
 
   .bottom-toolbar {
