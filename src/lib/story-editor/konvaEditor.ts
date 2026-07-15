@@ -17,6 +17,7 @@
 import type KonvaNamespace from "konva";
 import type { EditorState, ImageLayer, Layer, TextLayer } from "./types";
 import type { EditorStore } from "./editorStore";
+import { ensureFontsLoaded } from "./fonts";
 
 type Konva = typeof KonvaNamespace;
 // Konva's own types don't export a single "any node" alias that's convenient
@@ -45,6 +46,9 @@ export interface StoryCanvasOptions {
 const BASE_IMAGE_NAME = "story-editor-base-image";
 const MIN_NODE_SIZE = 10;
 const MIN_FONT_SIZE = 6;
+const MIN_EXPORT_PIXEL_RATIO = 1;
+const MAX_EXPORT_PIXEL_RATIO = 3;
+const DEFAULT_EXPORT_PIXEL_RATIO = 2;
 
 function touchDistance(a: Touch, b: Touch): number {
   return Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
@@ -70,6 +74,8 @@ export class StoryCanvasController {
   private unsubscribe: () => void = () => {};
   private destroyed = false;
   private selectedLayerId: string | null = null;
+  /** Most recent store snapshot — used by `exportBlob` to know which fonts are in use. */
+  private lastState: EditorState | null = null;
 
   /** Active textarea-overlay edit session, if any (Phase 5 double-tap reuses this). */
   private activeTextEdit: { layerId: string; textarea: HTMLTextAreaElement } | null = null;
@@ -179,6 +185,7 @@ export class StoryCanvasController {
   // ---- store -> Konva sync -------------------------------------------------
 
   private syncFromStore(state: EditorState): void {
+    this.lastState = state;
     this.syncBaseImage(state);
     this.syncLayers(state);
     this.syncSelection(state);
@@ -651,10 +658,58 @@ export class StoryCanvasController {
     this.store.updateLayer(layerId, { text: value } as Partial<Layer>);
   }
 
-  // ---- export (Phase 7 wires this up further) ------------------------------
+  // ---- export (Phase 7) ---------------------------------------------------
 
-  toDataURL(options: Parameters<KonvaNamespace.Stage["toDataURL"]>[0] = {}): string {
-    return this.stage.toDataURL(options);
+  /**
+   * Flattens the stage to a single JPEG blob, ready to upload. Three safety
+   * measures per the Phase 7 plan (the first two called out in the doc, the
+   * third caught while implementing this):
+   *  - Verifies every font currently in use is actually loaded right before
+   *    drawing — `fillText` silently substitutes a fallback font for
+   *    anything not loaded *at draw time*, and once flattened to pixels
+   *    there's no fixing it after the fact.
+   *  - Caps `pixelRatio` to [1, 3]: the interactive stage stays at normal
+   *    resolution the whole time (mobile Safari has a per-canvas memory
+   *    ceiling that a permanently-oversized stage would risk hitting), and
+   *    only the export step temporarily rasterizes at higher density.
+   *  - Temporarily detaches the `Transformer` from whatever's selected. It
+   *    lives in the same Konva Layer as the actual content, so if a layer
+   *    happens to be selected when the user taps "Post", its resize/rotate
+   *    handles would otherwise get baked straight into the exported pixels.
+   *    Restored afterwards (in a `finally`) so the UI doesn't lose the
+   *    selection if the export/upload fails and editing continues.
+   */
+  async exportBlob(
+    options: { pixelRatio?: number; mimeType?: string; quality?: number } = {},
+  ): Promise<Blob> {
+    const textLayers = (this.lastState?.layers ?? []).filter(
+      (l): l is TextLayer => l.type === "text",
+    );
+    await ensureFontsLoaded(textLayers);
+
+    const pixelRatio = Math.min(
+      MAX_EXPORT_PIXEL_RATIO,
+      Math.max(MIN_EXPORT_PIXEL_RATIO, options.pixelRatio ?? DEFAULT_EXPORT_PIXEL_RATIO),
+    );
+
+    const previouslySelectedNodes = this.transformer.nodes();
+    this.transformer.nodes([]);
+    this.mainLayer.batchDraw();
+
+    try {
+      const blob = await this.stage.toBlob({
+        pixelRatio,
+        mimeType: options.mimeType ?? "image/jpeg",
+        quality: options.quality ?? 0.92,
+      });
+      if (!blob) {
+        throw new Error("Could not export the story image.");
+      }
+      return blob as Blob;
+    } finally {
+      this.transformer.nodes(previouslySelectedNodes);
+      this.mainLayer.batchDraw();
+    }
   }
 
   destroy(): void {

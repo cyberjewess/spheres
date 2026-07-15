@@ -1,6 +1,8 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onMount, onDestroy, tick } from "svelte";
   import { browser } from "$app/environment";
+  import { enhance, applyAction } from "$app/forms";
+  import type { SubmitFunction } from "@sveltejs/kit";
   import type { PageData, ActionData } from "./$types";
   import { createEditorStore } from "$lib/story-editor/editorStore";
   import { StoryCanvasController, type SelectionRect } from "$lib/story-editor/konvaEditor";
@@ -49,6 +51,13 @@
   let fileInputEl: HTMLInputElement;
   let pendingFileTarget: "base" | "photo-layer" | null = null;
   let fileError: string | null = null;
+
+  // ---- export & submit (Phase 7) ------------------------------------------
+  let caption = "";
+  let isSubmitting = false;
+  let submitError: string | null = null;
+  let postFormEl: HTMLFormElement;
+  let uploadedImageUrl = "";
 
   // Bounding box of the current selection, in stage-local pixels — drives
   // the floating trash/duplicate toolbar's position (Phase 4). `null` when
@@ -330,6 +339,65 @@
     draggingLayerId = null;
     dragOverIndex = null;
   }
+
+  // ---- export & submit (Phase 7) ------------------------------------------
+  //
+  // Flow: flatten the stage to a JPEG blob (font-loaded check happens inside
+  // `exportBlob` itself, right before drawing) -> upload it client-direct to
+  // Vercel Blob via the storage adapter's token endpoint (/api/upload) ->
+  // fill in the hidden form's imageUrl and submit it to the `createStoryPost`
+  // action that's been ready since Phase 1.
+
+  async function handlePost(): Promise<void> {
+    if (!canvasController || isSubmitting) return;
+    if (!hasBaseImage) {
+      submitError = "Pick a starting photo first.";
+      return;
+    }
+    if (!selectedSphereId) {
+      submitError = "Choose a Sphere to post to.";
+      return;
+    }
+
+    isSubmitting = true;
+    submitError = null;
+
+    try {
+      const blob = await canvasController.exportBlob({
+        pixelRatio: 2,
+        mimeType: "image/jpeg",
+        quality: 0.9,
+      });
+
+      // Client-direct upload — the browser streams straight to Vercel Blob;
+      // our server never sees the image bytes, only the token
+      // request/completion round trips via /api/upload (see that route and
+      // the storage adapter in src/lib/server/storage/).
+      const { upload } = await import("@vercel/blob/client");
+      const pathname = `stories/${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`;
+      const result = await upload(pathname, blob, {
+        access: "public",
+        handleUploadUrl: "/api/upload",
+        contentType: "image/jpeg",
+      });
+
+      uploadedImageUrl = result.url;
+      await tick(); // let the hidden imageUrl input pick up the new value before submitting
+      postFormEl.requestSubmit();
+    } catch (err) {
+      console.error("Story export/upload failed: " + err);
+      submitError =
+        err instanceof Error ? err.message : "Could not export or upload your story.";
+      isSubmitting = false;
+    }
+  }
+
+  const handlePostFormResult: SubmitFunction = () => {
+    return async ({ result }) => {
+      isSubmitting = false;
+      await applyAction(result);
+    };
+  };
 </script>
 
 <svelte:head>
@@ -365,6 +433,14 @@
         on:click={() => (showLayerList = !showLayerList)}
       >
         Layers
+      </button>
+      <button
+        type="button"
+        class="post-button"
+        disabled={!hasBaseImage || !selectedSphereId || isSubmitting}
+        on:click={handlePost}
+      >
+        {isSubmitting ? "Posting…" : "Post"}
       </button>
     </header>
 
@@ -489,6 +565,18 @@
       </div>
     {/if}
 
+    {#if hasBaseImage}
+      <div class="caption-row">
+        <input
+          type="text"
+          class="caption-input"
+          placeholder="Add a caption (optional)"
+          maxlength="120"
+          bind:value={caption}
+        />
+      </div>
+    {/if}
+
     <footer class="bottom-toolbar">
       <button
         type="button"
@@ -529,6 +617,28 @@
     {#if form?.message}
       <p class="error" role="alert">{form.message}</p>
     {/if}
+
+    {#if submitError}
+      <p class="error" role="alert">{submitError}</p>
+    {/if}
+
+    <!--
+      Hidden form for the actual submit — kept separate from the visible
+      "Post" button because posting needs an async pre-step (export +
+      client-direct upload) to finish and fill in imageUrl before this can
+      be submitted. `handlePost` calls `requestSubmit()` once that's done.
+    -->
+    <form
+      method="POST"
+      action="?/createStoryPost"
+      bind:this={postFormEl}
+      use:enhance={handlePostFormResult}
+      class="visually-hidden"
+    >
+      <input type="hidden" name="sphere" value={selectedSphereId ?? ""} />
+      <input type="hidden" name="title" value={caption} />
+      <input type="hidden" name="imageUrl" bind:value={uploadedImageUrl} />
+    </form>
   {/if}
 </div>
 
@@ -561,6 +671,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
     padding: 0.75rem 1rem;
     gap: 0.5rem;
     flex: 0 0 auto;
@@ -598,6 +709,40 @@
 
   .layers-toggle:disabled {
     opacity: 0.4;
+  }
+
+  .post-button {
+    background-color: lightblue;
+    color: #1d3040;
+    border: none;
+    border-radius: 8px;
+    padding: 0.45rem 1rem;
+    font-weight: bold;
+    font-size: 0.9rem;
+  }
+
+  .post-button:disabled {
+    opacity: 0.4;
+  }
+
+  .caption-row {
+    flex: 0 0 auto;
+    padding: 0.3rem 1rem;
+  }
+
+  .caption-input {
+    width: 100%;
+    box-sizing: border-box;
+    background-color: rgba(255, 255, 255, 0.08);
+    color: white;
+    border: solid gray;
+    border-radius: 10px;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.95rem;
+  }
+
+  .caption-input::placeholder {
+    color: rgba(255, 255, 255, 0.5);
   }
 
   .visually-hidden {
