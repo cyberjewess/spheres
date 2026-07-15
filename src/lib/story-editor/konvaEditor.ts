@@ -15,7 +15,7 @@
  * out of the SSR bundle and out of any shared/main bundle chunk.
  */
 import type KonvaNamespace from "konva";
-import type { EditorState, Layer, TextLayer } from "./types";
+import type { EditorState, ImageLayer, Layer, TextLayer } from "./types";
 import type { EditorStore } from "./editorStore";
 
 type Konva = typeof KonvaNamespace;
@@ -29,38 +29,80 @@ export interface StageSize {
   height: number;
 }
 
+/** Axis-aligned bounding box of the current selection, in stage-local pixels. */
+export interface SelectionRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface StoryCanvasOptions {
+  /** Fired whenever the selected layer's on-screen bounding box changes (select/drag/transform/pinch), or with `null` when nothing is selected. Drives the floating trash/duplicate toolbar position. */
+  onSelectionBoundsChange?: (rect: SelectionRect | null) => void;
+}
+
 const BASE_IMAGE_NAME = "story-editor-base-image";
+const MIN_NODE_SIZE = 10;
+const MIN_FONT_SIZE = 6;
+
+function touchDistance(a: Touch, b: Touch): number {
+  return Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
+}
+
+function touchAngleDeg(a: Touch, b: Touch): number {
+  return (Math.atan2(b.clientY - a.clientY, b.clientX - a.clientX) * 180) / Math.PI;
+}
 
 export class StoryCanvasController {
   private readonly Konva: Konva;
   private readonly container: HTMLDivElement;
   private readonly store: EditorStore;
+  private readonly options: StoryCanvasOptions;
 
   private stage!: KonvaNamespace.Stage;
   private mainLayer!: KonvaNamespace.Layer;
+  private transformer!: KonvaNamespace.Transformer;
   private baseImageNode: KonvaNamespace.Image | null = null;
   private readonly nodesById = new Map<string, AnyNode>();
 
   private resizeObserver: ResizeObserver | null = null;
   private unsubscribe: () => void = () => {};
   private destroyed = false;
+  private selectedLayerId: string | null = null;
 
   /** Active textarea-overlay edit session, if any (Phase 5 double-tap reuses this). */
   private activeTextEdit: { layerId: string; textarea: HTMLTextAreaElement } | null = null;
 
-  private constructor(container: HTMLDivElement, store: EditorStore, Konva: Konva) {
+  /** Hand-rolled two-finger pinch (scale) + twist (rotate) gesture state, Phase 4. */
+  private pinchState: {
+    layerId: string;
+    node: AnyNode;
+    lastDist: number;
+    lastAngle: number;
+    wasDraggable: boolean;
+  } | null = null;
+
+  private constructor(
+    container: HTMLDivElement,
+    store: EditorStore,
+    Konva: Konva,
+    options: StoryCanvasOptions,
+  ) {
     this.container = container;
     this.store = store;
     this.Konva = Konva;
+    this.options = options;
   }
 
   static async create(
     container: HTMLDivElement,
     store: EditorStore,
+    options: StoryCanvasOptions = {},
   ): Promise<StoryCanvasController> {
     const mod = await import("konva");
     const Konva = mod.default;
-    const controller = new StoryCanvasController(container, store, Konva);
+    const controller = new StoryCanvasController(container, store, Konva, options);
     controller.init();
     return controller;
   }
@@ -75,10 +117,39 @@ export class StoryCanvasController {
     this.mainLayer = new this.Konva.Layer();
     this.stage.add(this.mainLayer);
 
+    this.transformer = new this.Konva.Transformer({
+      rotateEnabled: true,
+      flipEnabled: false,
+      boundBoxFunc: (oldBox, newBox) => {
+        if (Math.abs(newBox.width) < MIN_NODE_SIZE || Math.abs(newBox.height) < MIN_NODE_SIZE) {
+          return oldBox;
+        }
+        return newBox;
+      },
+    });
+    this.mainLayer.add(this.transformer);
+    this.transformer.on("transform", () => this.emitSelectionBounds());
+    this.transformer.on("transformend", () => {
+      const node = this.transformer.nodes()[0] as AnyNode | undefined;
+      if (!node) return;
+      const layerId = this.findLayerIdForNode(node);
+      if (layerId) this.bakeAndCommitTransform(layerId, node);
+    });
+
+    // Tap/click on empty stage area (or the non-listening base image, whose
+    // events pass through to the stage) deselects — standard Konva pattern.
+    this.stage.on("click tap", (e) => {
+      if (e.target === this.stage) {
+        this.store.selectLayer(null);
+      }
+    });
+
     if (typeof ResizeObserver !== "undefined") {
       this.resizeObserver = new ResizeObserver(() => this.handleResize());
       this.resizeObserver.observe(this.container);
     }
+
+    this.attachPinchGestures();
 
     this.unsubscribe = this.store.subscribe((state) => this.syncFromStore(state));
   }
@@ -102,6 +173,7 @@ export class StoryCanvasController {
     // image is enough to keep the background sane.
     this.fitBaseImage();
     this.mainLayer.batchDraw();
+    this.emitSelectionBounds();
   }
 
   // ---- store -> Konva sync -------------------------------------------------
@@ -109,6 +181,8 @@ export class StoryCanvasController {
   private syncFromStore(state: EditorState): void {
     this.syncBaseImage(state);
     this.syncLayers(state);
+    this.syncSelection(state);
+    this.transformer.moveToTop();
     this.mainLayer.batchDraw();
   }
 
@@ -183,9 +257,10 @@ export class StoryCanvasController {
         node = this.createNodeForLayer(layer);
         this.nodesById.set(layer.id, node);
         this.mainLayer.add(node as never);
-      } else if (!this.isBeingEdited(layer.id)) {
-        // Don't stomp on a node whose textarea overlay is currently live —
-        // its Konva node is intentionally hidden/stale until edit commits.
+      } else if (!this.isBeingEdited(layer.id) && !this.isBeingTransformed(layer.id)) {
+        // Don't stomp on a node whose textarea overlay or pinch gesture is
+        // currently live — its authoritative state is the live Konva node,
+        // not the (stale, pre-commit) store snapshot.
         this.updateNodeFromLayer(node, layer);
       }
       // +1 keeps index 0 reserved for the base image at the very bottom.
@@ -194,38 +269,60 @@ export class StoryCanvasController {
 
     for (const [id, node] of this.nodesById) {
       if (!seenIds.has(id)) {
+        if (this.selectedLayerId === id) {
+          this.transformer.nodes([]);
+        }
         node.destroy();
         this.nodesById.delete(id);
       }
     }
   }
 
+  private syncSelection(state: EditorState): void {
+    this.selectedLayerId = state.selectedLayerId;
+    const node = state.selectedLayerId ? this.nodesById.get(state.selectedLayerId) : undefined;
+    if (!node) {
+      this.transformer.nodes([]);
+      this.emitSelectionBounds();
+      return;
+    }
+    this.transformer.nodes([node]);
+    this.emitSelectionBounds();
+  }
+
   private isBeingEdited(layerId: string): boolean {
     return this.activeTextEdit?.layerId === layerId;
   }
 
-  private createNodeForLayer(layer: Layer): AnyNode {
-    if (layer.type === "image") {
-      const imageEl = new window.Image();
-      imageEl.src = layer.src;
-      const node = new this.Konva.Image({
-        image: imageEl,
-        x: layer.x,
-        y: layer.y,
-        width: layer.width,
-        height: layer.height,
-        rotation: layer.rotation,
-        draggable: false, // enabled in Phase 4 alongside selection/Transformer
-      });
-      if (!(imageEl.complete && imageEl.naturalWidth > 0)) {
-        imageEl.onload = () => {
-          if (!this.destroyed) this.mainLayer.batchDraw();
-        };
-      }
-      return node;
-    }
+  private isBeingTransformed(layerId: string): boolean {
+    return this.pinchState?.layerId === layerId;
+  }
 
-    return this.createTextNode(layer);
+  private createNodeForLayer(layer: Layer): AnyNode {
+    const node: AnyNode =
+      layer.type === "image" ? this.createImageNode(layer) : this.createTextNode(layer);
+    this.attachInteractions(node, layer.id);
+    return node;
+  }
+
+  private createImageNode(layer: ImageLayer): KonvaNamespace.Image {
+    const imageEl = new window.Image();
+    imageEl.src = layer.src;
+    const node = new this.Konva.Image({
+      image: imageEl,
+      x: layer.x,
+      y: layer.y,
+      width: layer.width,
+      height: layer.height,
+      rotation: layer.rotation,
+      draggable: true,
+    });
+    if (!(imageEl.complete && imageEl.naturalWidth > 0)) {
+      imageEl.onload = () => {
+        if (!this.destroyed) this.mainLayer.batchDraw();
+      };
+    }
+    return node;
   }
 
   private createTextNode(layer: TextLayer): KonvaNamespace.Text {
@@ -239,9 +336,29 @@ export class StoryCanvasController {
       fontSize: layer.fontSize,
       fill: layer.color,
       align: layer.align,
-      draggable: false, // enabled in Phase 4
+      draggable: true,
       padding: 4,
       wrap: "word",
+    });
+  }
+
+  /** Tap-to-select, drag-to-move — wired once per node at creation time (Phase 4). */
+  private attachInteractions(node: AnyNode, layerId: string): void {
+    node.on("click tap", (evt) => {
+      // Stop this from bubbling to the stage's own "click tap" handler,
+      // which would otherwise immediately deselect again.
+      evt.cancelBubble = true;
+      this.store.selectLayer(layerId);
+    });
+    node.on("dragstart", () => {
+      this.store.selectLayer(layerId);
+    });
+    node.on("dragmove", () => {
+      this.emitSelectionBounds();
+    });
+    node.on("dragend", () => {
+      this.store.updateLayer(layerId, { x: node.x(), y: node.y() } as Partial<Layer>);
+      this.emitSelectionBounds();
     });
   }
 
@@ -280,7 +397,161 @@ export class StoryCanvasController {
     }
   }
 
-  // ---- adding layers (Phase 3) --------------------------------------------
+  // ---- transform-end bake (Transformer handles + pinch gesture) -----------
+
+  private findLayerIdForNode(node: AnyNode): string | null {
+    for (const [id, n] of this.nodesById) {
+      if (n === node) return id;
+    }
+    return null;
+  }
+
+  /**
+   * Bakes a Konva node's accumulated `scaleX`/`scaleY` back into real
+   * width/height (images) or `fontSize`/width (text — resizing text by
+   * leaving it as a bitmap scale would go blurry/pixelated), resets scale to
+   * 1, and commits the result to the store. Shared by Transformer
+   * handle-drags and the hand-rolled pinch gesture below.
+   */
+  private bakeAndCommitTransform(layerId: string, node: AnyNode): void {
+    const scaleX = node.scaleX();
+    const scaleY = node.scaleY();
+    const rotation = node.rotation();
+    const x = node.x();
+    const y = node.y();
+
+    if (node instanceof this.Konva.Text) {
+      const averageScale = (scaleX + scaleY) / 2;
+      const newFontSize = Math.max(MIN_FONT_SIZE, Math.round(node.fontSize() * averageScale));
+      const newWidth = Math.max(20, node.width() * scaleX);
+      node.setAttrs({ fontSize: newFontSize, width: newWidth, scaleX: 1, scaleY: 1 });
+      this.store.updateLayer(layerId, {
+        x,
+        y,
+        rotation,
+        width: newWidth,
+        fontSize: newFontSize,
+      } as Partial<Layer>);
+    } else if (node instanceof this.Konva.Image) {
+      const newWidth = Math.max(MIN_NODE_SIZE, node.width() * scaleX);
+      const newHeight = Math.max(MIN_NODE_SIZE, node.height() * scaleY);
+      node.setAttrs({ width: newWidth, height: newHeight, scaleX: 1, scaleY: 1 });
+      this.store.updateLayer(layerId, {
+        x,
+        y,
+        rotation,
+        width: newWidth,
+        height: newHeight,
+      } as Partial<Layer>);
+    }
+    this.emitSelectionBounds();
+  }
+
+  // ---- hand-rolled two-finger pinch (scale) + twist (rotate) --------------
+  //
+  // Konva's Transformer only handles single-pointer handle-drag resize/
+  // rotate; simultaneous two-finger pinch+twist (the core IG-story gesture)
+  // isn't built in, so this follows Konva's documented multi-touch recipe:
+  // two-touch distance -> scale, two-touch angle -> rotation. Registered
+  // with { passive: false } so preventDefault() actually stops the page
+  // from scrolling/zooming during the gesture (touch-action: none on the
+  // stage wrapper, set in Phase 1, is the other half of that).
+
+  private attachPinchGestures(): void {
+    this.container.addEventListener("touchstart", this.handleTouchStart, { passive: false });
+    this.container.addEventListener("touchmove", this.handleTouchMove, { passive: false });
+    this.container.addEventListener("touchend", this.handleTouchEnd, { passive: false });
+    this.container.addEventListener("touchcancel", this.handleTouchEnd, { passive: false });
+  }
+
+  private detachPinchGestures(): void {
+    this.container.removeEventListener("touchstart", this.handleTouchStart);
+    this.container.removeEventListener("touchmove", this.handleTouchMove);
+    this.container.removeEventListener("touchend", this.handleTouchEnd);
+    this.container.removeEventListener("touchcancel", this.handleTouchEnd);
+  }
+
+  private handleTouchStart = (e: TouchEvent): void => {
+    if (e.touches.length !== 2 || !this.selectedLayerId) return;
+    const node = this.nodesById.get(this.selectedLayerId);
+    if (!node) return;
+    e.preventDefault();
+
+    // Hand off from Konva's own single-pointer drag to our manual transform
+    // for the duration of the gesture, so the two systems don't fight.
+    const wasDraggable = node.draggable();
+    if (typeof (node as unknown as { isDragging?: () => boolean }).isDragging === "function") {
+      const draggableNode = node as unknown as { isDragging: () => boolean; stopDrag: () => void };
+      if (draggableNode.isDragging()) draggableNode.stopDrag();
+    }
+    node.draggable(false);
+
+    const [t1, t2] = [e.touches[0], e.touches[1]];
+    this.pinchState = {
+      layerId: this.selectedLayerId,
+      node,
+      lastDist: touchDistance(t1, t2),
+      lastAngle: touchAngleDeg(t1, t2),
+      wasDraggable,
+    };
+  };
+
+  private handleTouchMove = (e: TouchEvent): void => {
+    if (!this.pinchState || e.touches.length !== 2) return;
+    e.preventDefault();
+
+    const [t1, t2] = [e.touches[0], e.touches[1]];
+    const dist = touchDistance(t1, t2);
+    const angle = touchAngleDeg(t1, t2);
+    const { node, lastDist, lastAngle } = this.pinchState;
+
+    if (lastDist > 0) {
+      const scaleBy = dist / lastDist;
+      node.scaleX(node.scaleX() * scaleBy);
+      node.scaleY(node.scaleY() * scaleBy);
+    }
+    node.rotation(node.rotation() + (angle - lastAngle));
+
+    this.pinchState.lastDist = dist;
+    this.pinchState.lastAngle = angle;
+
+    this.transformer.forceUpdate();
+    this.mainLayer.batchDraw();
+    this.emitSelectionBounds();
+  };
+
+  private handleTouchEnd = (e: TouchEvent): void => {
+    if (!this.pinchState) return;
+    if (e.touches.length >= 2) return;
+
+    const { layerId, node, wasDraggable } = this.pinchState;
+    this.pinchState = null;
+    node.draggable(wasDraggable);
+    this.bakeAndCommitTransform(layerId, node);
+  };
+
+  // ---- selection bounds (drives the floating trash/duplicate toolbar) ----
+
+  private emitSelectionBounds(): void {
+    if (!this.options.onSelectionBoundsChange) return;
+    if (!this.selectedLayerId || this.transformer.nodes().length === 0) {
+      this.options.onSelectionBoundsChange(null);
+      return;
+    }
+    // Transformer.getClientRect() takes no relativeTo option — unlike
+    // Node.getClientRect(), it always returns coordinates in the Stage's own
+    // coordinate space, which is exactly stage-local pixels here since this
+    // stage is never panned, scaled, or offset.
+    const rect = this.transformer.getClientRect();
+    this.options.onSelectionBoundsChange({
+      x: rect.x,
+      y: rect.y,
+      width: rect.width,
+      height: rect.height,
+    });
+  }
+
+  // ---- text editing (Phase 3, reused by Phase 5's double-tap) ------------
 
   /**
    * Enters text-edit mode for a given layer: hides the Konva.Text node and
@@ -382,6 +653,7 @@ export class StoryCanvasController {
       this.activeTextEdit.textarea.remove();
       this.activeTextEdit = null;
     }
+    this.detachPinchGestures();
     this.resizeObserver?.disconnect();
     this.unsubscribe();
     this.stage.destroy();

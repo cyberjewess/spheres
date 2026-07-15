@@ -65,13 +65,15 @@ Today `Post` is text-only (`title`, `content` — see `prisma/schema.prisma`) an
 
 **Known simplification**: on a container resize (e.g. orientation change mid-edit), the base image is re-fit to the new stage size, but existing layers' `x`/`y`/`width` are left as absolute stage-pixel coordinates from whenever they were placed — there's no "design size vs. stage size" proportional reflow. Flagging as a deliberate scope cut rather than an oversight; revisit if orientation changes mid-edit turn out to matter in practice.
 
-## Phase 4 — transform interactions
-- [ ] Tap a layer → select it, attach `Konva.Transformer` to show resize/rotate handles
-- [ ] Tap empty canvas → deselect (hide transformer + trash icon) — standard stage-level tap handler checking if target is the background
-- [ ] Single-finger drag → move (Konva `draggable: true`, built in)
-- [ ] Two-finger pinch+twist → simultaneous resize + rotate (hand-rolled per Konva's multi-touch recipe; register the touchmove listener with `{ passive: false }` so `preventDefault()` actually stops page scroll during the gesture)
-- [ ] Floating trash-can icon button positioned above the selected layer's bounding box (derive position from `transformer.getClientRect()`), tap to delete that layer — exactly the "easily remove any layer" requirement
-- [ ] Optional: duplicate-layer icon next to trash, common IG-editor convenience
+## Phase 4 — transform interactions — ✅ done
+- [x] Tap a layer → `store.selectLayer(id)` (via a `click tap` listener attached once per node at creation); a `Konva.Transformer` is attached to the corresponding node in `syncSelection` whenever `state.selectedLayerId` changes — resize/rotate handles follow automatically. `flipEnabled: false` and a `boundBoxFunc` floor of 10px stop the handles from flipping a layer inside-out or collapsing it to zero size.
+- [x] Tap empty canvas → deselect: a stage-level `click tap` handler checks `e.target === stage` (true both for genuinely empty area and for the non-listening base image, since its events pass through to the stage). Each node's own `click tap` handler sets `evt.cancelBubble = true` so selecting a layer doesn't immediately re-trigger the stage's deselect handler.
+- [x] Single-finger drag → move: nodes are now created with `draggable: true` (Phase 3 had this off, deferred to this phase). `dragend` commits `{x, y}` to the store; `dragmove` only updates the floating toolbar's position live, without touching the store (no per-frame store churn).
+- [x] Two-finger pinch+twist → hand-rolled exactly per Konva's documented multi-touch recipe: `touchstart`/`touchmove`/`touchend`/`touchcancel` registered on the stage container with `{ passive: false }`, two-touch distance drives `scaleX`/`scaleY`, two-touch angle drives `rotation`, applied incrementally frame-to-frame. `node.draggable(false)` (and `stopDrag()` if mid-drag) for the gesture's duration so Konva's own single-pointer drag doesn't fight the manual transform; restored after. On lift, the accumulated scale is baked into real `width`/`height` (images) or `fontSize`/`width` (text — see below) via the same `bakeAndCommitTransform` helper the Transformer's `transformend` uses, then committed to the store once.
+- [x] Floating trash-can button, positioned from `transformer.getClientRect()` (via an `onSelectionBoundsChange` callback the Svelte component turns into absolute CSS `top`/`left`, clamped to stay on-screen and flipping to below the selection if there's no room above) — solid and immediately visible the moment anything is selected, tap deletes via `store.deleteLayer(id)` (the store already handles clearing selection/re-normalizing zIndex, no extra plumbing needed).
+- [x] Duplicate-layer icon next to trash, same floating toolbar, calls `store.duplicateLayer(id)` — done since it was cheap given the store already supported it.
+
+**Scope note — resize baking touches Phase 5 slightly early**: making the Transformer/pinch gesture bake scale into `fontSize` (text) instead of leaving a bitmap `scaleX`/`scaleY` (which would go blurry) is unavoidable to make resize *work correctly at all* in this phase, so `bakeAndCommitTransform` already does it — Phase 5's remaining scope is just the font/color pickers and double-tap-to-edit wiring on top of what's here.
 
 ## Phase 5 — text layer specifics
 - [ ] Font picker UI (small curated list from Phase 0) — changing font/size while text is selected re-renders the `Konva.Text` node live

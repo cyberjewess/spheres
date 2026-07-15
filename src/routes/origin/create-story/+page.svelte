@@ -3,9 +3,13 @@
   import { browser } from "$app/environment";
   import type { PageData, ActionData } from "./$types";
   import { createEditorStore } from "$lib/story-editor/editorStore";
-  import { StoryCanvasController } from "$lib/story-editor/konvaEditor";
+  import { StoryCanvasController, type SelectionRect } from "$lib/story-editor/konvaEditor";
   import { loadImageFile } from "$lib/story-editor/imageLoader";
   import { DEFAULT_FONT_FAMILY, DEFAULT_TEXT_COLOR } from "$lib/story-editor/fonts";
+
+  const FLOATING_TOOLBAR_HEIGHT = 44;
+  const FLOATING_TOOLBAR_WIDTH = 96;
+  const FLOATING_TOOLBAR_GAP = 8;
 
   export let data: PageData;
   export let form: ActionData;
@@ -38,8 +42,34 @@
   let pendingFileTarget: "base" | "photo-layer" | null = null;
   let fileError: string | null = null;
 
+  // Bounding box of the current selection, in stage-local pixels — drives
+  // the floating trash/duplicate toolbar's position (Phase 4). `null` when
+  // nothing is selected.
+  let selectionRect: SelectionRect | null = null;
+
   $: editorState = $store;
   $: hasBaseImage = editorState.baseImage !== null;
+  $: floatingToolbarStyle = computeFloatingToolbarStyle(selectionRect);
+
+  function computeFloatingToolbarStyle(rect: SelectionRect | null): string {
+    if (!rect || !stageWrapperEl) return "display: none;";
+    const stageWidth = stageWrapperEl.clientWidth;
+    const stageHeight = stageWrapperEl.clientHeight;
+
+    let left = rect.x + rect.width / 2 - FLOATING_TOOLBAR_WIDTH / 2;
+    left = Math.max(4, Math.min(left, stageWidth - FLOATING_TOOLBAR_WIDTH - 4));
+
+    // Prefer floating above the selection's bounding box; if that would go
+    // off the top of the canvas (layer near the top edge), drop below it
+    // instead so it's always visible.
+    let top = rect.y - FLOATING_TOOLBAR_HEIGHT - FLOATING_TOOLBAR_GAP;
+    if (top < 4) {
+      top = rect.y + rect.height + FLOATING_TOOLBAR_GAP;
+    }
+    top = Math.min(top, stageHeight - FLOATING_TOOLBAR_HEIGHT - 4);
+
+    return `left: ${left}px; top: ${top}px;`;
+  }
 
   onMount(() => {
     const meta = document.querySelector('meta[name="viewport"]');
@@ -54,7 +84,11 @@
     document.body.style.overflow = "hidden";
 
     if (browser && hasSpheres && stageWrapperEl) {
-      StoryCanvasController.create(stageWrapperEl, store).then((controller) => {
+      StoryCanvasController.create(stageWrapperEl, store, {
+        onSelectionBoundsChange: (rect) => {
+          selectionRect = rect;
+        },
+      }).then((controller) => {
         canvasController = controller;
       });
     }
@@ -124,6 +158,20 @@
     // Phase 5 adds double-tap-to-re-enter for existing text layers.
     canvasController?.enterTextEditMode(id);
   }
+
+  // The core "easily remove any layer" requirement — a floating trash icon
+  // above the selected layer's bounding box (Phase 4).
+  function deleteSelectedLayer(): void {
+    const id = editorState.selectedLayerId;
+    if (!id) return;
+    store.deleteLayer(id);
+  }
+
+  function duplicateSelectedLayer(): void {
+    const id = editorState.selectedLayerId;
+    if (!id) return;
+    store.duplicateLayer(id);
+  }
 </script>
 
 <svelte:head>
@@ -163,6 +211,27 @@
           <p>Pick a starting photo for your story.</p>
           <button type="button" class="primary-button" on:click={promptForBaseImage}>
             Choose photo
+          </button>
+        </div>
+      {/if}
+
+      {#if selectionRect && editorState.selectedLayerId}
+        <div class="floating-toolbar" style={floatingToolbarStyle} role="toolbar">
+          <button
+            type="button"
+            class="floating-button"
+            aria-label="Duplicate layer"
+            on:click={duplicateSelectedLayer}
+          >
+            ⧉
+          </button>
+          <button
+            type="button"
+            class="floating-button danger"
+            aria-label="Delete layer"
+            on:click={deleteSelectedLayer}
+          >
+            🗑
           </button>
         </div>
       {/if}
@@ -288,6 +357,33 @@
     touch-action: none;
     overflow: hidden;
     display: flex;
+  }
+
+  .floating-toolbar {
+    position: absolute;
+    display: flex;
+    gap: 8px;
+    z-index: 50;
+    /* Pure DOM overlay — never touches Konva's own event system, so it
+       can't accidentally trigger the stage's tap-to-deselect handler. */
+  }
+
+  .floating-button {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    border: 2px solid white;
+    background-color: rgba(20, 20, 24, 0.85);
+    color: white;
+    font-size: 1.1rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  }
+
+  .floating-button.danger {
+    background-color: rgba(200, 40, 40, 0.9);
   }
 
   .pick-base-photo {
