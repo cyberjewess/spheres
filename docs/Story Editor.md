@@ -53,11 +53,17 @@ Today `Post` is text-only (`title`, `content` — see `prisma/schema.prisma`) an
 
 **Deviation from the Phase 0 checklist**: dropped `svelte-konva` from the dependency list. Reasoning (from the Sonnet agent building this): every interaction in Phases 4-7 (hand-rolled pinch/rotate, `Transformer.getClientRect()` for the trash icon, manual z-order, textarea-overlay text editing) needs direct Konva node handles regardless, so `svelte-konva`'s reactive prop-binding would just be a second reactivity system fighting Svelte's and Konva's own for no benefit — this is exactly the fallback the "Tech approach" section above already called out (drive vanilla Konva imperatively via `onMount`/`onDestroy` if the wrapper fights gesture updates). Going straight to the fallback rather than adopting-then-abandoning the wrapper. `konva` itself (not the Svelte wrapper) is added as a dependency.
 
-## Phase 3 — base image + adding layers
-- [ ] Base layer: `<input type="file" accept="image/*" capture>` (capture hints camera on mobile) to pick/take the starting photo; load into Konva as the bottom `Konva.Image`
-- [ ] "Add photo layer" — same file input, adds a new `Konva.Image` node on top with default centered position/size
-- [ ] "Add text layer" — adds a `Konva.Text` node with default font/size/color, immediately enters edit mode (see Phase 5)
-- [ ] Bottom toolbar (thumb-reachable) with add-photo / add-text buttons, `env(safe-area-inset-bottom)` padding so it's not obscured by the iOS home-indicator bar
+## Phase 3 — base image + adding layers — ✅ done
+- [x] Base layer: `<input type="file" accept="image/*" capture="environment">` (hidden, triggered by a "Choose photo" button shown until a base image is picked) loads via `src/lib/story-editor/imageLoader.ts#loadImageFile` (object URL + decoded `HTMLImageElement`, nothing uploaded yet) and lands in the store via `store.setBaseImage(url, width, height)`; the Konva controller contain-fits it as the bottom, non-interactive (`listening: false`) `Konva.Image`, re-fitting on container resize
+- [x] "Add photo layer" — same file picker/loader, centered on the current stage size at up to 70% of stage width, added via `store.addImageLayer(...)`
+- [x] "Add text layer" — `store.addTextLayer(...)` with a default font/size/color from the new `src/lib/story-editor/fonts.ts` (`DEFAULT_FONT_FAMILY`/`DEFAULT_TEXT_COLOR`), then immediately calls `StoryCanvasController.enterTextEditMode(id)` — Konva's documented editable-text pattern: hide the `Konva.Text` node, overlay a `<textarea>` positioned/sized/rotated/fonted to match it, swap back and commit the text to the store on blur. This same method is reused for double-tap-to-edit in Phase 5.
+- [x] Bottom toolbar with add-photo/add-text buttons (disabled until a base image exists) plus Undo/Redo (added now since the store already supports it — cheap, and useful for manually verifying Phase 2's history logic once there's something on screen to undo), `env(safe-area-inset-bottom)` padding
+
+**New files**: `src/lib/story-editor/konvaEditor.ts` (`StoryCanvasController` — the imperative Konva scene, store-driven per the Phase 2 deviation), `src/lib/story-editor/imageLoader.ts`, `src/lib/story-editor/fonts.ts` (curated font list + `ensureFontsLoaded`/`collectFontFacesInUse`, the latter two written now but wired into the export gate in Phase 7).
+
+**Verified the code-splitting goal, not just assumed it**: ran a full `vite build` and inspected `.svelte-kit/output/client/.vite/manifest.json` — `/origin/create-story` maps to `nodes/10`, whose only reference to the ~193KB Konva chunk is a `dynamicImports` entry (from the `import("konva")` inside `StoryCanvasController.create()`). No other route or the main entry chunk references it. Confirms Konva loads lazily, only when this route mounts, never in the shared bundle.
+
+**Known simplification**: on a container resize (e.g. orientation change mid-edit), the base image is re-fit to the new stage size, but existing layers' `x`/`y`/`width` are left as absolute stage-pixel coordinates from whenever they were placed — there's no "design size vs. stage size" proportional reflow. Flagging as a deliberate scope cut rather than an oversight; revisit if orientation changes mid-edit turn out to matter in practice.
 
 ## Phase 4 — transform interactions
 - [ ] Tap a layer → select it, attach `Konva.Transformer` to show resize/rotate handles
