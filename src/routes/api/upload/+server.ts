@@ -21,9 +21,9 @@ import type { RequestHandler } from "./$types";
  * directly, per the storage-adapter abstraction (Phase 0).
  */
 export const POST: RequestHandler = async ({ request, locals }) => {
-  const body = await request.json();
-
   try {
+    const body = await request.json();
+
     const result = await storage.handleClientUploadRequest({
       body,
       request,

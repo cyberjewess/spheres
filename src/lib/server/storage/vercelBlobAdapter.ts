@@ -39,4 +39,21 @@ export const vercelBlobAdapter: StorageAdapter = {
   async deleteImage(url: string): Promise<void> {
     await del(url);
   },
+
+  isOwnUrl(url: string): boolean {
+    // Vercel Blob public URLs look like
+    // `https://<store-id>.public.blob.vercel-storage.com/<pathname>` — the
+    // store id varies per deployment, so check the hostname *suffix* rather
+    // than hardcoding a specific store id.
+    let hostname: string;
+    try {
+      hostname = new URL(url).hostname;
+    } catch {
+      return false;
+    }
+    return (
+      hostname === "public.blob.vercel-storage.com" ||
+      hostname.endsWith(".public.blob.vercel-storage.com")
+    );
+  },
 };

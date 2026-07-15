@@ -1,5 +1,6 @@
 import type { Actions } from "./$types";
 import { prisma } from "$lib/server/prisma";
+import { storage } from "$lib/server/storage";
 import { fail } from "@sveltejs/kit";
 
 /** @type {import('./$types').PageLoad} */
@@ -91,13 +92,26 @@ export const actions: Actions = {
     if (!id) {
       return fail(500, { message: "invalid request" });
     }
+    let deletedPost;
     try {
-      await prisma.post.delete({ where: { id: Number(id) } });
+      // Prisma's delete() return value includes the deleted row's fields, so
+      // this also gets us imageUrl without a separate fetch.
+      deletedPost = await prisma.post.delete({ where: { id: Number(id) } });
     } catch (err) {
       console.error(err);
       return fail(500, {
         message: "Something went wrong deleting your article",
       });
+    }
+
+    if (deletedPost.imageUrl) {
+      // Best-effort: don't let a storage-provider hiccup block the Post row
+      // deletion the user asked for, which already succeeded above.
+      try {
+        await storage.deleteImage(deletedPost.imageUrl);
+      } catch (err) {
+        console.error("deletePost: failed to delete underlying image blob: " + err);
+      }
     }
 
     return { status: 200 };

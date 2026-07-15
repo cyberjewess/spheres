@@ -55,6 +55,13 @@
   // dedicated, Svelte-untouched child element instead.
   let konvaContainerEl: HTMLDivElement;
   let canvasController: StoryCanvasController | null = null;
+  // `StoryCanvasController.create` is async (awaits a dynamic `import("konva")`).
+  // If the component unmounts before that resolves, `onDestroy`'s
+  // `canvasController?.destroy()` no-ops on `null` and the controller that
+  // finishes constructing afterward would never get destroyed, leaking its
+  // ResizeObserver, touch listeners, and store subscription. This flag lets
+  // the `.then()` callback below detect that case and destroy it immediately.
+  let destroyed = false;
 
   let fileInputEl: HTMLInputElement;
   let pendingFileTarget: "base" | "photo-layer" | null = null;
@@ -144,12 +151,20 @@
           selectionRect = rect;
         },
       }).then((controller) => {
+        if (destroyed) {
+          // Component unmounted while Konva was still loading — destroy the
+          // controller immediately instead of assigning it, so it doesn't
+          // leak its ResizeObserver/touch listeners/store subscription.
+          controller.destroy();
+          return;
+        }
         canvasController = controller;
       });
     }
   });
 
   onDestroy(() => {
+    destroyed = true;
     canvasController?.destroy();
     if (typeof document === "undefined") return;
     const meta = document.querySelector('meta[name="viewport"]');

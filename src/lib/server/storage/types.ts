@@ -85,4 +85,13 @@ export interface StorageAdapter {
 
   /** Deletes a previously-uploaded image, given its public URL. */
   deleteImage(url: string): Promise<void>;
+
+  /**
+   * Returns true if the given URL was actually produced by this storage
+   * provider (as opposed to an arbitrary attacker-supplied URL). Routes that
+   * accept an `imageUrl` from client-submitted form data (e.g.
+   * `createStoryPost`) must call this before persisting/rendering it — never
+   * trust the URL's shape/domain just because it looks plausible.
+   */
+  isOwnUrl(url: string): boolean;
 }

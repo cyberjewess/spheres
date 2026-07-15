@@ -1,4 +1,5 @@
 import { prisma } from "$lib/server/prisma";
+import { storage } from "$lib/server/storage";
 import { fail, redirect, type Actions } from "@sveltejs/kit";
 import type { PageServerLoad } from "./$types";
 
@@ -42,6 +43,11 @@ export const actions: Actions = {
     if (!sphere) {
       return fail(400, { message: "Choose a Sphere to post to." });
     }
+    if (!storage.isOwnUrl(imageUrl)) {
+      return fail(400, {
+        message: "Invalid image — please try posting again.",
+      });
+    }
 
     // Two-step user lookup (locals.username -> user.id), same pattern as
     // origin/+page.server.ts's createPost action. Deliberately NOT the
@@ -56,13 +62,25 @@ export const actions: Actions = {
       return fail(401, { message: "You must be logged in to post." });
     }
 
+    // A user may only post into a Sphere they actually own — `sphere` is
+    // untrusted client input, so it must be re-verified server-side rather
+    // than trusted just because it appeared in `userSpheres` on `load`.
+    const ownedSphere = await prisma.sphere.findFirst({
+      where: { id: Number(sphere), userId: user.id },
+    });
+    if (!ownedSphere) {
+      return fail(403, {
+        message: "You don't have permission to post to that Sphere.",
+      });
+    }
+
     try {
       await prisma.post.create({
         data: {
           title: title || "Story",
           imageUrl,
           userId: user.id,
-          sphereId: Number(sphere),
+          sphereId: ownedSphere.id,
         },
       });
     } catch (err) {

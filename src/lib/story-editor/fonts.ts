@@ -40,7 +40,13 @@ export function collectFontFacesInUse(
     if (!seen.has(key)) {
       seen.set(key, {
         family: layer.fontFamily,
-        cssFontString: `${DEFAULT_FONT_WEIGHT} ${size}px "${layer.fontFamily}"`,
+        // Konva never sets `fontStyle`/weight on the Text node it renders
+        // (see konvaEditor.ts's createTextNode/updateNodeFromLayer), so it
+        // always draws at normal (400) weight regardless of
+        // DEFAULT_FONT_WEIGHT — check/load the weight that's actually drawn,
+        // not the picker's nominal default, or this safety check verifies
+        // the wrong font face for every multi-weight family.
+        cssFontString: `400 ${size}px "${layer.fontFamily}"`,
       });
     }
   }

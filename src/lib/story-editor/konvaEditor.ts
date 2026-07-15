@@ -177,7 +177,7 @@ export class StoryCanvasController {
     // change mid-edit) — a real reflow needs a "design size" vs "stage size"
     // distinction that's out of scope for this phase. Re-fitting the base
     // image is enough to keep the background sane.
-    this.fitBaseImage();
+    this.fitBaseImage(this.lastState ?? undefined);
     this.mainLayer.batchDraw();
     this.emitSelectionBounds();
   }
@@ -279,10 +279,27 @@ export class StoryCanvasController {
         if (this.selectedLayerId === id) {
           this.transformer.nodes([]);
         }
+        if (this.isBeingEdited(id)) {
+          // The layer is gone from the store (e.g. deleted mid-edit) — the
+          // node still needs destroying below, but the textarea overlay
+          // (appended independently to document.body) would otherwise be
+          // orphaned and its eventual blur would call `updateLayer` on a
+          // nonexistent id, silently polluting the undo stack with a no-op
+          // history entry. Tear down the edit session without committing.
+          this.discardActiveTextEdit();
+        }
         node.destroy();
         this.nodesById.delete(id);
       }
     }
+  }
+
+  /** Cancels an in-progress text-edit session without committing its value to the store — used when the underlying layer has already been removed out from under it. */
+  private discardActiveTextEdit(): void {
+    const active = this.activeTextEdit;
+    if (!active) return;
+    this.activeTextEdit = null;
+    active.textarea.remove();
   }
 
   private syncSelection(state: EditorState): void {
@@ -490,6 +507,13 @@ export class StoryCanvasController {
 
   private handleTouchStart = (e: TouchEvent): void => {
     if (e.touches.length !== 2 || !this.selectedLayerId) return;
+    // Don't start a pinch/rotate gesture while a text layer's textarea
+    // overlay is live — `startTextEditing` only hides the Konva.Text node,
+    // it doesn't deselect the layer, so without this guard a two-finger
+    // touch would grab the hidden node, scale/rotate it, and bake that
+    // transform into the store on touch-end while the visible textarea (a
+    // separate DOM element) is completely unaffected.
+    if (this.activeTextEdit) return;
     const node = this.nodesById.get(this.selectedLayerId);
     if (!node) return;
     e.preventDefault();
@@ -581,6 +605,11 @@ export class StoryCanvasController {
    * and double-tap-to-edit an existing one (Phase 5).
    */
   enterTextEditMode(layerId: string): void {
+    // A two-finger pinch requires 2 simultaneous touches, so this can only
+    // race a double-tap-to-edit in practice — bail rather than let a
+    // textarea overlay appear mid-gesture while the pinch code still holds a
+    // reference to (and keeps transforming) the underlying node.
+    if (this.pinchState) return;
     const node = this.nodesById.get(layerId);
     if (!node || !(node instanceof this.Konva.Text)) return;
     if (this.activeTextEdit) this.commitActiveTextEdit();
