@@ -6,11 +6,14 @@
   import { StoryCanvasController, type SelectionRect } from "$lib/story-editor/konvaEditor";
   import { loadImageFile } from "$lib/story-editor/imageLoader";
   import { DEFAULT_FONT_FAMILY, DEFAULT_TEXT_COLOR, FONT_OPTIONS } from "$lib/story-editor/fonts";
-  import type { TextLayer } from "$lib/story-editor/types";
+  import type { Layer, TextLayer } from "$lib/story-editor/types";
 
   const MIN_FONT_SIZE = 8;
   const MAX_FONT_SIZE = 200;
   const FONT_SIZE_STEP = 4;
+
+  const LONG_PRESS_MS = 350;
+  const DRAG_CANCEL_THRESHOLD_PX = 10;
 
   const FLOATING_TOOLBAR_HEIGHT = 44;
   const FLOATING_TOOLBAR_WIDTH = 96;
@@ -52,9 +55,30 @@
   // nothing is selected.
   let selectionRect: SelectionRect | null = null;
 
+  // ---- layer list panel (Phase 6) -----------------------------------------
+  let showLayerList = false;
+  let layerListEl: HTMLDivElement;
+
+  // Long-press + drag reorder state. A timer arms dragging after
+  // LONG_PRESS_MS without significant movement, so an ordinary tap-to-select
+  // or a list-scroll gesture isn't mistaken for a reorder drag.
+  let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+  let pointerStart = { x: 0, y: 0 };
+  let draggingLayerId: string | null = null;
+  let dragOverIndex: number | null = null;
+  let suppressNextRowClick = false;
+
   $: editorState = $store;
   $: hasBaseImage = editorState.baseImage !== null;
   $: floatingToolbarStyle = computeFloatingToolbarStyle(selectionRect);
+  // Layer list is top-first (frontmost first) — the reverse of the store's
+  // bottom-to-top array order.
+  $: displayLayers = [...editorState.layers].reverse();
+  // While a long-press-drag is in progress, reorder the *displayed* list
+  // live for feedback, but don't touch the store until the drag ends — same
+  // "commit on gesture-end, not every frame" rule as drag/transform/pinch on
+  // the canvas itself.
+  $: previewLayers = reorderPreview(displayLayers, draggingLayerId, dragOverIndex);
   // Only non-null when the current selection is a text layer — drives the
   // font/color/size panel (Phase 5). Kept as its own reactive value (rather
   // than narrowing `layer.type === "text"` inline in the template) so the
@@ -213,6 +237,99 @@
     );
     store.updateLayer(selectedTextLayer.id, { fontSize: newSize });
   }
+
+  // ---- layer list: tap-to-select + long-press-drag-to-reorder (Phase 6) ---
+
+  function layerLabel(layer: Layer): string {
+    if (layer.type === "image") return "Photo layer";
+    return layer.text.trim() || "Text layer";
+  }
+
+  function reorderPreview(
+    list: Layer[],
+    dragId: string | null,
+    overIndex: number | null,
+  ): Layer[] {
+    if (!dragId || overIndex === null) return list;
+    const fromIndex = list.findIndex((l) => l.id === dragId);
+    if (fromIndex === -1 || fromIndex === overIndex) return list;
+    const copy = [...list];
+    const [moved] = copy.splice(fromIndex, 1);
+    copy.splice(overIndex, 0, moved);
+    return copy;
+  }
+
+  function handleRowClick(layerId: string): void {
+    if (suppressNextRowClick) {
+      suppressNextRowClick = false;
+      return;
+    }
+    store.selectLayer(layerId);
+  }
+
+  function handleRowPointerDown(e: PointerEvent, layerId: string): void {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    pointerStart = { x: e.clientX, y: e.clientY };
+    if (longPressTimer) clearTimeout(longPressTimer);
+    longPressTimer = setTimeout(() => {
+      longPressTimer = null;
+      draggingLayerId = layerId;
+      suppressNextRowClick = true;
+      dragOverIndex = previewLayers.findIndex((l) => l.id === layerId);
+    }, LONG_PRESS_MS);
+
+    window.addEventListener("pointermove", handleWindowPointerMove, { passive: false });
+    window.addEventListener("pointerup", handleWindowPointerUp, { once: true });
+    window.addEventListener("pointercancel", handleWindowPointerUp, { once: true });
+  }
+
+  function handleWindowPointerMove(e: PointerEvent): void {
+    if (draggingLayerId) {
+      e.preventDefault();
+      updateDragOverIndex(e.clientY);
+      return;
+    }
+    // Not armed yet — a real long-press-drag hasn't started. If the pointer
+    // has moved enough that this looks like a scroll/tap instead, cancel the
+    // pending long-press so it doesn't fire mid-scroll.
+    const dx = e.clientX - pointerStart.x;
+    const dy = e.clientY - pointerStart.y;
+    if (Math.hypot(dx, dy) > DRAG_CANCEL_THRESHOLD_PX && longPressTimer) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+  }
+
+  function updateDragOverIndex(clientY: number): void {
+    if (!layerListEl) return;
+    const rows = Array.from(layerListEl.querySelectorAll<HTMLElement>("[data-layer-row]"));
+    let newIndex = rows.length - 1;
+    for (let i = 0; i < rows.length; i++) {
+      const rect = rows[i].getBoundingClientRect();
+      if (clientY < rect.top + rect.height / 2) {
+        newIndex = i;
+        break;
+      }
+    }
+    dragOverIndex = newIndex;
+  }
+
+  function handleWindowPointerUp(): void {
+    window.removeEventListener("pointermove", handleWindowPointerMove);
+    if (longPressTimer) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+    if (draggingLayerId && dragOverIndex !== null) {
+      // previewLayers is displayed top-first; the store's `layers` array is
+      // bottom-first, so the display index needs flipping before it's a
+      // valid zIndex-style index for `reorderLayer`.
+      const storeIndex = editorState.layers.length - 1 - dragOverIndex;
+      store.reorderLayer(draggingLayerId, storeIndex);
+    }
+    draggingLayerId = null;
+    dragOverIndex = null;
+  }
 </script>
 
 <svelte:head>
@@ -239,6 +356,16 @@
           {/each}
         </select>
       </label>
+      <button
+        type="button"
+        class="layers-toggle"
+        class:active={showLayerList}
+        disabled={editorState.layers.length === 0}
+        aria-pressed={showLayerList}
+        on:click={() => (showLayerList = !showLayerList)}
+      >
+        Layers
+      </button>
     </header>
 
     <!--
@@ -328,6 +455,37 @@
           <span class="visually-hidden">Text color</span>
           <input type="color" value={selectedTextLayer.color} on:change={handleColorChange} />
         </label>
+      </div>
+    {/if}
+
+    {#if showLayerList}
+      <div class="layer-list-panel" bind:this={layerListEl}>
+        {#if previewLayers.length === 0}
+          <p class="layer-list-empty">No layers yet.</p>
+        {/if}
+        {#each previewLayers as layer (layer.id)}
+          <div
+            class="layer-row"
+            class:selected={editorState.selectedLayerId === layer.id}
+            class:dragging={draggingLayerId === layer.id}
+            data-layer-row
+            role="button"
+            tabindex="0"
+            on:click={() => handleRowClick(layer.id)}
+            on:keydown={(e) => e.key === "Enter" && handleRowClick(layer.id)}
+            on:pointerdown={(e) => handleRowPointerDown(e, layer.id)}
+          >
+            <span class="layer-thumb">
+              {#if layer.type === "image"}
+                <img src={layer.src} alt="" />
+              {:else}
+                <span class="layer-thumb-text" style="color: {layer.color}">Aa</span>
+              {/if}
+            </span>
+            <span class="layer-label">{layerLabel(layer)}</span>
+            <span class="layer-grip" aria-hidden="true">⠿</span>
+          </div>
+        {/each}
       </div>
     {/if}
 
@@ -421,6 +579,25 @@
     border: solid gray;
     border-radius: 8px;
     padding: 0.35rem 0.5rem;
+  }
+
+  .layers-toggle {
+    background-color: #1d3040;
+    color: white;
+    border: solid gray;
+    border-radius: 8px;
+    padding: 0.4rem 0.7rem;
+    font-size: 0.85rem;
+  }
+
+  .layers-toggle.active {
+    background-color: lightblue;
+    color: #1d3040;
+    font-weight: bold;
+  }
+
+  .layers-toggle:disabled {
+    opacity: 0.4;
   }
 
   .visually-hidden {
@@ -540,6 +717,86 @@
     border: solid gray;
     border-radius: 8px;
     background: none;
+  }
+
+  .layer-list-panel {
+    flex: 0 0 auto;
+    max-height: 35dvh;
+    overflow-y: auto;
+    padding: 0.5rem 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    background-color: rgba(255, 255, 255, 0.04);
+    /* Long-press-drag needs vertical pointer moves to reach us before the
+       browser starts a native scroll; a plain tap/scroll still works
+       because the long-press timer (350ms) filters those out. */
+    touch-action: pan-y;
+  }
+
+  .layer-list-empty {
+    text-align: center;
+    opacity: 0.6;
+    padding: 0.5rem 0;
+  }
+
+  .layer-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.4rem 0.6rem;
+    border: solid gray;
+    border-radius: 8px;
+    background-color: #16232e;
+    user-select: none;
+    touch-action: none;
+  }
+
+  .layer-row.selected {
+    border-color: lightblue;
+    background-color: #1d3040;
+  }
+
+  .layer-row.dragging {
+    opacity: 0.6;
+    border-color: lightblue;
+  }
+
+  .layer-thumb {
+    width: 36px;
+    height: 36px;
+    border-radius: 6px;
+    overflow: hidden;
+    background-color: #0b0b0d;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+  }
+
+  .layer-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .layer-thumb-text {
+    font-weight: bold;
+    font-size: 0.9rem;
+  }
+
+  .layer-label {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.9rem;
+  }
+
+  .layer-grip {
+    opacity: 0.5;
+    font-size: 1.1rem;
+    padding: 0 0.2rem;
   }
 
   .bottom-toolbar {
