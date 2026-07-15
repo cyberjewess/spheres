@@ -46,6 +46,14 @@
   const canRedo = store.canRedo;
 
   let stageWrapperEl: HTMLDivElement;
+  // Konva's Stage constructor unconditionally does `container.innerHTML = '';`
+  // (see node_modules/konva/lib/Stage.js `_buildDOM`) before inserting its own
+  // `.konvajs-content` div — it wipes ANY existing children of whatever
+  // element it's handed. `stage-wrapper` also hosts Svelte-rendered overlays
+  // (the "choose photo" prompt, the floating trash/duplicate toolbar), so
+  // Konva must never be given that element directly — it gets its own
+  // dedicated, Svelte-untouched child element instead.
+  let konvaContainerEl: HTMLDivElement;
   let canvasController: StoryCanvasController | null = null;
 
   let fileInputEl: HTMLInputElement;
@@ -130,8 +138,8 @@
     previousBodyOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
 
-    if (browser && hasSpheres && stageWrapperEl) {
-      StoryCanvasController.create(stageWrapperEl, store, {
+    if (browser && hasSpheres && konvaContainerEl) {
+      StoryCanvasController.create(konvaContainerEl, store, {
         onSelectionBoundsChange: (rect) => {
           selectionRect = rect;
         },
@@ -450,6 +458,14 @@
       native scroll/zoom gestures.
     -->
     <div class="stage-wrapper" id="story-stage-wrapper" bind:this={stageWrapperEl}>
+      <!--
+        Konva's Stage constructor wipes this element's children on mount
+        (see the comment on `konvaContainerEl` above) — it must never hold
+        anything Svelte itself renders, so it's a dedicated leaf element
+        rather than `stage-wrapper` itself.
+      -->
+      <div class="konva-container" bind:this={konvaContainerEl}></div>
+
       {#if !hasBaseImage}
         <div class="pick-base-photo">
           <p>Pick a starting photo for your story.</p>
@@ -762,6 +778,12 @@
     display: flex;
   }
 
+  .konva-container {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+  }
+
   .floating-toolbar {
     position: absolute;
     display: flex;
@@ -790,6 +812,12 @@
   }
 
   .pick-base-photo {
+    /* Explicit stacking context, z-index above .konva-container (0) — CSS
+       paints *any* positioned element above non-positioned in-flow siblings
+       regardless of DOM order, so without this the (empty, but still
+       painted) Konva canvas would visually cover this prompt. */
+    position: relative;
+    z-index: 1;
     margin: auto;
     text-align: center;
     padding: 0 2rem;
