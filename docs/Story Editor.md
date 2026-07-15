@@ -24,7 +24,7 @@ Today `Post` is text-only (`title`, `content` — see `prisma/schema.prisma`) an
 - [ ] Set up Vercel Blob: add `BLOB_READ_WRITE_TOKEN` to env (dev + Vercel project), document in README alongside the existing `vercel env pull` instructions
 - [x] **Storage adapter abstraction** — done. `src/lib/server/storage/types.ts` defines `StorageAdapter` (`handleClientUploadRequest`, `deleteImage`) mirroring Vercel Blob's real client-direct-upload flow (checked against the actual `@vercel/blob@2.6.1` types, not guessed); `vercelBlobAdapter.ts` is the only file importing `@vercel/blob`; `index.ts` re-exports it as `storage` — the single import point for the rest of the app. Swapping providers later = new adapter file + one export change.
 - [x] Prisma: `imageUrl String?` added to `Post`, `content` made `String?` (single `Post` model, nullable `imageUrl` distinguishes a story post from a text post — see open question below on whether that's sufficient long-term)
-- [ ] Migration: hand-written SQL exists at `prisma/migrations/20260715011800_add_image_url_to_post/migration.sql` (no live DB was available to actually run/verify it — ⚠️ **run `npx prisma migrate dev` against a real database to confirm/regenerate before relying on it**, then regenerate the Prisma client)
+- [ ] Migration: hand-written SQL exists at `prisma/migrations/20260715011800_add_image_url_to_post/migration.sql` (no live DB was available to actually run/verify it — ⚠️ **run `npx prisma migrate dev` against a real database to confirm/regenerate before relying on it**). `npx prisma generate` (schema-only, no DB connection needed) has been run so the Prisma Client types include `Post.imageUrl` — required for `create-story/+page.server.ts` to typecheck; the client still needs regenerating again after `migrate dev` actually runs against a real database.
 - [ ] Decide on a `draft` JSON column (or skip drafts for v1) — layer-stack state (§ below) is easy to persist later if you want "save and resume editing," but not required for a first cut
 - [x] Fonts picked/licensed/self-hosted — 6 families (8 files, ~208KB), all SIL OFL 1.1, sourced from Google Fonts, files in `static/fonts/` + `OFL.txt`/`ATTRIBUTION.txt`, `@font-face` rules in `src/lib/fonts.css`, imported once from root `+layout.svelte`:
 
@@ -37,11 +37,13 @@ Today `Post` is text-only (`title`, `content` — see `prisma/schema.prisma`) an
   | `Playfair Display` (400, 700) | Serif — elegant/editorial captions |
   | `Space Mono` (400, 700) | Monospace — typewriter/technical caption mood |
 
-## Phase 1 — editor shell & route
-- [ ] New route `src/routes/origin/create-story/+page.svelte` + `+page.server.ts` (server action needs `locals.username` → userId lookup, following the existing two-step pattern in `origin/+page.server.ts` — do **not** copy the hardcoded `userId: 1` bug from `[postId]/+page.server.ts`'s `updatePost`)
-- [ ] Entry point: button/link from `origin` page (alongside `CreatePostForm`) into the story editor, sphere picker reused from existing `CreatePostForm.svelte` pattern (select which Sphere the finished story posts to)
-- [ ] Mobile viewport meta tweak scoped to this route only: prevent page-level pinch-zoom fighting the canvas gesture (`user-scalable=no` / `maximum-scale=1` on this route, not app-wide)
-- [ ] Editor container sized with `100dvh` (not `100vh` — iOS Safari's dynamic toolbar makes `100vh` unreliable), `touch-action: none` on the stage wrapper so Konva's own touch handling isn't fought by native scroll/zoom
+## Phase 1 — editor shell & route — ✅ done
+- [x] New route `src/routes/origin/create-story/+page.svelte` + `+page.server.ts`. `load` does the two-step `locals.username` → `prisma.user.findUniqueOrThrow` → `.id` lookup, then fetches that user's owned Spheres for the picker. The `createStoryPost` action does the same two-step lookup (not the hardcoded `userId: 1` bug in `[postId]/+page.server.ts`), validates `sphere`/`imageUrl` are present, uses `fail()` for every error path, and `redirect(303, "/origin")` on success. The action is fully wired now even though nothing calls it yet — Phase 7 only needs to add the client-side upload-then-submit flow.
+- [x] Entry point: "+ New Story" link on `/origin`, next to `CreatePostForm`, gated behind the same `userSpheresExists` check (posting a story requires an owned Sphere, same precondition as the existing post form)
+- [x] Scoped mobile-viewport tweak: `onMount`/`onDestroy` mutate (and restore) the existing root `<meta name="viewport">` tag's `content` in-place instead of editing `src/app.html`, so `user-scalable=no`/`maximum-scale=1` only applies while this route is mounted. Also locks `document.body.style.overflow` for the same duration (restored on destroy) so the page can't scroll behind the full-bleed editor.
+- [x] Editor container: `100dvh` height, `position: fixed; inset: 0` (breaks out of the root layout's centered 90%-width body without touching that global stylesheet), `touch-action: none` on the `.stage-wrapper` div that Phase 3 will mount the Konva stage into
+
+**Deviation**: this route deliberately does not render the shared `Navbar` — full-bleed, single-purpose editor screens (matching the IG-story-composer convention) instead get a top-left "×" close link back to `/origin`. Everything else (Sphere picker markup, `fail()` error display) follows existing patterns.
 
 ## Phase 2 — layer model & state — ✅ done
 - [x] `Layer` discriminated union (`ImageLayer` | `TextLayer`) in `src/lib/story-editor/types.ts`, plus `EditorState`/`createEmptyEditorState()`

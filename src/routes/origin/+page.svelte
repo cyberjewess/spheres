@@ -77,6 +77,9 @@
       {/if}
       {#if userSpheresExists}
         <CreatePostForm spheres={userSpheres} />
+        <a class="new-story-link" href="/origin/create-story" role="button">
+          + New Story
+        </a>
       {/if}
       <CreateSphereForm />
     </div>
@@ -116,7 +119,26 @@
 
   .upper {
     display: flex;
+    align-items: flex-start;
     padding-bottom: 1%;
+  }
+
+  .new-story-link {
+    display: block;
+    width: fit-content;
+    margin: 0.5em auto 0;
+    padding: 0.5em 1em;
+    border: solid gray;
+    border-radius: 10px;
+    background-color: lightblue;
+    color: #1d3040;
+    text-align: center;
+    font-weight: bold;
+  }
+
+  .new-story-link:hover {
+    opacity: 0.85;
+    text-decoration: none;
   }
 
   .posts {
